@@ -335,8 +335,11 @@ body.salvando { cursor: progress; }
 .pagina-rotulo strong { font: 600 15px/1.1 var(--f-display); color: var(--ink); }
 .pagina-rotulo span { font-size: 12px; color: var(--muted); }
 .pagina-rotulo .tag { justify-self: start; margin-top: 4px; }
-.vagas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.vagas { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); gap: 8px; }
+.vagas > .vaga { grid-column: span var(--span, 1); }
 .vagas.inteira { grid-template-columns: minmax(0, 1fr); }
+.vagas.inteira > .vaga, .vagas.em-lista > .vaga { grid-column: auto; }
+.vagas.em-lista { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
 .vaga {
   position: relative; display: grid; gap: 3px; align-content: start; text-align: left; min-width: 0;
   padding: 10px 12px 11px; border: 0; border-radius: 16px; background: var(--surface-2);
@@ -350,6 +353,8 @@ button.vaga:hover { box-shadow: inset 0 0 0 2px var(--t); }
 .vaga-q { margin-left: auto; font: 600 13px/1 var(--f-display); color: var(--t-ink); flex: none; }
 .vaga-nick { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .vaga-sub { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vaga-pos { font: 600 12px/1.25 var(--f-corpo); color: var(--t-ink); overflow-wrap: anywhere; }
+.vaga.cedida .vaga-pos { color: var(--cede-tinta); }
 .vaga-passou { font-size: 12px; color: var(--falta-tinta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vaga-passou s { text-decoration-thickness: 1.5px; }
 .vaga.prioridade { background: var(--ouro-suave); box-shadow: inset 0 0 0 1.5px var(--sol-linha); }
@@ -615,6 +620,8 @@ tbody tr.saiu td { color: var(--muted); }
   .painel-cabeca h1 { font-size: 25px; }
   .hoje-meta { justify-items: start; }
   .vagas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vagas > .vaga { grid-column: auto; }
+  .vagas.juntas, .vagas.em-lista { grid-template-columns: minmax(0, 1fr); }
   .pagina { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .pagina-rotulo { padding-top: 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
   .pagina-rotulo .tag { margin-top: 0; }
@@ -653,7 +660,7 @@ tbody tr.saiu td { color: var(--muted); }
 
   const ITENS_PADRAO = [
     {
-      id: 'album', nome: 'Álbum de Fragmento', curto: 'Álbum', modo: 'unidade', cor: 'uva', icone: 'album', ativo: true,
+      id: 'album', nome: 'Álbum de Fragmento', curto: 'Álbum', modo: 'unidade', porVez: 1, cor: 'uva', icone: 'album', ativo: true,
       bonus: { id: 'pacote', nome: 'Pac. Frag. Ilusória', curto: 'Pacote', icone: 'pacote', cor: 'rosa' },
       designado: { id: 'album_d', nome: 'Álbum Designado', curto: 'Álbum desig.' }
     },
@@ -759,6 +766,8 @@ tbody tr.saiu td { color: var(--muted); }
     e.registros = Array.isArray(d.registros) ? d.registros : [];
     e.sessoes = Array.isArray(d.sessoes) ? d.sessoes : [];
     for (const it of e.itens) {
+      if (it.modo !== 'pagina') it.modo = 'unidade';
+      it.porVez = inteiro(it.porVez, 1, 99, 1);
       e.filas[it.id] = Object.assign({ ponteiro: null, ponteiroDesig: null }, e.filas[it.id] || {});
       garantirItem(e, it.id);
     }
@@ -841,29 +850,291 @@ tbody tr.saiu td { color: var(--muted); }
     return Object.assign(base, r, { passes: Object.assign({}, r.passes), cedidos: Object.assign({}, r.cedidos) });
   }
 
-  /* As vagas que saíram. Cada página tem `vagas` unidades (4 por padrão).
-     - modo 'unidade' (Álbum): cada unidade é uma vaga de 1 membro, a página atende 4 pessoas.
-     - modo 'pagina' (Baús): a página inteira é uma vaga só, com as 4 unidades para o mesmo membro.
-     A última página pode vir incompleta. O bônus (Pacote) sai nas páginas depois do item. */
+  /* Quantas unidades cada membro leva por vez num item. null = a página inteira. */
+  function porVez(it) { return it && it.modo === 'pagina' ? null : inteiro(it && it.porVez, 1, 99, 1); }
+
+  function regraDoItem(it) {
+    const n = porVez(it);
+    if (n == null) return 'página inteira por membro';
+    return n === 1 ? '1 por membro' : n + ' seguidas por membro';
+  }
+
+  /* O item principal e, se tiver, o bônus que sai nas páginas depois dele. */
+  function seriesDoItem(it, r) {
+    const s = [{ itemId: it.id, bonus: false, paginas: inteiro(r.paginas, 0, 99, 0), ultima: r.ultima }];
+    if (it.bonus) s.push({ itemId: it.bonus.id, bonus: true, paginas: inteiro(r.paginasBonus, 0, 99, 0), ultima: r.ultimaBonus });
+    return s;
+  }
+  function paginasDaSerie(s, V) {
+    const out = [];
+    for (let p = 1; p <= s.paginas; p++) {
+      const ultimaPag = p === s.paginas;
+      out.push({ pagina: p, unidades: ultimaPag ? inteiro(s.ultima, 1, V, V) : V, ultimaPag });
+    }
+    return out;
+  }
+
+  /* As vezes que o leilão distribui. Cada página tem `vagas` unidades (4 por padrão).
+     - modo 'unidade': cada vez leva `porVez` unidades seguidas (1 no Álbum); a última vez leva o que sobrar.
+     - modo 'pagina': cada vez é uma página inteira, com todas as unidades dela.
+     A última página pode vir incompleta. O bônus (Pacote) sai nas páginas depois do item.
+     Onde cada unidade fica na tela é decidido depois, em montarLayout. */
   function gerarVagas(it, r, vagasPorPagina) {
     const V = vagasPorPagina || 4;
-    const series = [{ itemId: it.id, bonus: false, paginas: inteiro(r.paginas, 0, 99, 0), ultima: r.ultima }];
-    if (it.bonus) series.push({ itemId: it.bonus.id, bonus: true, paginas: inteiro(r.paginasBonus, 0, 99, 0), ultima: r.ultimaBonus });
+    const N = porVez(it);
     const vagas = [];
-    for (const s of series) {
-      for (let p = 1; p <= s.paginas; p++) {
-        const ultimaPag = p === s.paginas;
-        const unidades = ultimaPag ? inteiro(s.ultima, 1, V, V) : V;
-        if (it.modo === 'pagina') {
-          vagas.push({ k: s.itemId + ':' + p, item: s.itemId, bonus: s.bonus, pagina: p, pos: 1, q: unidades, ultimaPag, unidades });
-        } else {
-          for (let v = 1; v <= unidades; v++) {
-            vagas.push({ k: s.itemId + ':' + p + ':' + v, item: s.itemId, bonus: s.bonus, pagina: p, pos: v, q: 1, ultimaPag, unidades });
+    for (const s of seriesDoItem(it, r)) {
+      const pags = paginasDaSerie(s, V);
+      if (N == null) {
+        for (const pg of pags) vagas.push({ k: s.itemId + ':p' + pg.pagina, item: s.itemId, bonus: s.bonus, pagina: pg.pagina, pos: 1, q: pg.unidades, ultimaPag: pg.ultimaPag, unidades: pg.unidades });
+        continue;
+      }
+      let n = 0, atual = null;
+      for (const pg of pags) {
+        for (let v = 1; v <= pg.unidades; v++) {
+          if (!atual || atual.q >= N) {
+            atual = { k: s.itemId + ':' + (++n), item: s.itemId, bonus: s.bonus, pagina: pg.pagina, pos: v, q: 0, ultimaPag: pg.ultimaPag, unidades: pg.unidades };
+            vagas.push(atual);
           }
+          atual.q++;
         }
       }
     }
     return vagas;
+  }
+
+  /* Quem fica com as unidades de uma vez: quem recebeu (se foi cedida) ou o dono. */
+  function quemPega(l) { return l.recebedor || (l.dono && l.dono.m) || null; }
+
+  /* Blocos inteiros que enchem o espaço certinho, preferindo os primeiros da lista
+     (quem foi chamado antes). Devolve as posições na lista, ou null se nada fecha. */
+  function encaixeExato(tamanhos, espaco) {
+    const melhor = new Array(espaco + 1).fill(null);
+    melhor[0] = [];
+    tamanhos.forEach((w, i) => {
+      if (!(w > 0) || w > espaco) return;
+      for (let s = espaco; s >= w; s--) {
+        if (!melhor[s - w]) continue;
+        const c = melhor[s - w].concat(i);
+        if (!melhor[s] || vemAntes(c, melhor[s])) melhor[s] = c;
+      }
+    });
+    return melhor[espaco];
+  }
+  function vemAntes(a, b) {
+    for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] < b[i];
+    return a.length < b.length;
+  }
+
+  /* Arruma os blocos (tudo o que é de uma pessoa) nas páginas, na ordem da chamada.
+     Se dá para fechar a página só com blocos inteiros, puxa esses blocos para ela, e
+     assim ninguém fica dividido entre duas páginas. Se não dá, segue a ordem: o bloco
+     que não cabe começa no fim da página e continua no começo da seguinte.
+     Devolve [bloco, unidades] na ordem das vagas. */
+  function arrumarNasPaginas(tamanhos, capacidades) {
+    const resta = tamanhos.slice();
+    let espera = tamanhos.map((_, i) => i).filter(i => resta[i] > 0);
+    const saida = [];
+    let quebrado = null;
+    for (const cap of capacidades) {
+      let livre = cap;
+      if (quebrado != null) {
+        const q = Math.min(resta[quebrado], livre);
+        saida.push([quebrado, q]); resta[quebrado] -= q; livre -= q;
+        if (resta[quebrado] > 0) continue;
+        quebrado = null;
+      }
+      if (livre <= 0) continue;
+      const exato = encaixeExato(espera.map(i => resta[i]), livre);
+      if (exato) {
+        const escolha = new Set(exato.map(j => espera[j]));
+        for (const b of espera) if (escolha.has(b)) { saida.push([b, resta[b]]); resta[b] = 0; }
+        espera = espera.filter(b => !escolha.has(b));
+        continue;
+      }
+      while (livre > 0 && espera.length) {
+        const b = espera.shift();
+        const q = Math.min(resta[b], livre);
+        saida.push([b, q]); resta[b] -= q; livre -= q;
+        if (resta[b] > 0) quebrado = b;
+      }
+    }
+    return saida;
+  }
+
+  /* Onde cada um pega no jogo.
+     1. A rotação decide quem é chamado em cada vez. Tudo o que foi chamado para a mesma
+        pessoa vira um bloco, e os blocos são arrumados nas páginas: ninguém fica com a
+        primeira e a última da mesma página, e cada um fica numa página só quando dá.
+     2. Falta, não quis e cedida não mexem nesse mapa: quem assume pega no lugar de quem
+        saiu, e quem não tem nada a ver continua onde estava, mesmo com o leilão rolando.
+     3. Se quem assumiu já tinha vaga, as vagas dele e as que ele assumiu são rearrumadas
+        só entre elas, para ficarem juntas sem tirar ninguém do lugar.
+     Na página inteira cada página continua sendo de um só. */
+  function montarLayout(it, r, V, linhas) {
+    const series = [];
+    const grupos = {};
+    for (const s of seriesDoItem(it, r)) {
+      const pags = paginasDaSerie(s, V).map(pg => Object.assign(pg, { partes: [] }));
+      const serie = { item: s.itemId, bonus: s.bonus, paginas: pags, grupos: [] };
+      series.push(serie);
+      const daSerie = linhas.filter(l => l.vaga.item === s.itemId);
+      if (porVez(it) == null) {
+        for (const l of daSerie) {
+          const pg = pags[l.vaga.pagina - 1];
+          const g = { k: s.itemId + '|p' + l.vaga.pagina, item: s.itemId, bonus: s.bonus, m: quemPega(l), linhas: [l], q: l.vaga.q, partes: [{ pagina: l.vaga.pagina, de: 1, ate: l.vaga.q, q: l.vaga.q }] };
+          grupos[g.k] = g; serie.grupos.push(g); l.g = g.k;
+          if (pg) pg.partes.push({ k: g.k, de: 1, ate: l.vaga.q, q: l.vaga.q, n: 0, linhas: [l], novas: [l] });
+        }
+        continue;
+      }
+
+      const lugares = [];
+      for (const pg of pags) for (let v = 1; v <= pg.unidades; v++) lugares.push({ pg, v });
+
+      const blocos = [], porChamado = {};
+      for (const l of daSerie) {
+        const c = (l.chamado && l.chamado.m) || '-';
+        let b = porChamado[c];
+        if (!b) { b = { c, linhas: [], q: 0 }; porChamado[c] = b; blocos.push(b); }
+        b.linhas.push(l); b.q += l.vaga.q;
+      }
+      const doBloco = blocos.map(() => []);
+      let u = 0;
+      for (const [b, q] of arrumarNasPaginas(blocos.map(b => b.q), pags.map(pg => pg.unidades))) {
+        for (let i = 0; i < q; i++) doBloco[b].push(u++);
+      }
+
+      const base = [], fim = [], linhaDe = [];
+      blocos.forEach((b, bi) => {
+        let i = 0;
+        for (const l of b.linhas) {
+          const quem = quemPega(l) || '-';
+          for (let k = 0; k < l.vaga.q; k++) { const x = doBloco[bi][i++]; base[x] = b.c; fim[x] = quem; linhaDe[x] = l; }
+        }
+      });
+
+      const lugaresDe = arr => { const o = {}; arr.forEach((h, x) => { (o[h] = o[h] || []).push(x); }); return o; };
+      const naBase = lugaresDe(base), noFim = lugaresDe(fim);
+      const mexidos = Object.keys(noFim).filter(h => String(naBase[h] || '') !== String(noFim[h]));
+      if (mexidos.length) {
+        const deles = [];
+        for (const h of mexidos) for (const x of noFim[h]) deles.push(x);
+        deles.sort((a, b) => a - b);
+        mexidos.sort((a, b) => noFim[a][0] - noFim[b][0]);
+        const vezesDe = {};
+        for (const h of mexidos) vezesDe[h] = noFim[h].map(x => linhaDe[x]);
+        let i = 0;
+        for (const h of mexidos) for (let k = 0; k < noFim[h].length; k++) { const y = deles[i++]; fim[y] = h; linhaDe[y] = vezesDe[h][k]; }
+      }
+
+      /* Cada pedaço guarda as vezes que caem nele (linhas) e as que aparecem nele pela
+         primeira vez (novas), para dizer "cedida" ou "no lugar de" só onde é o caso. */
+      for (const l of daSerie) l.g = s.itemId + '|' + (quemPega(l) || '-');
+      let atual = null;
+      const vistas = {};
+      fim.forEach((h, x) => {
+        const { pg, v } = lugares[x];
+        const k = s.itemId + '|' + h;
+        const l = linhaDe[x];
+        let g = grupos[k];
+        if (!g) {
+          g = { k, item: s.itemId, bonus: s.bonus, m: h === '-' ? null : h, linhas: daSerie.filter(y => y.g === k), q: 0, partes: [] };
+          grupos[k] = g; serie.grupos.push(g);
+        }
+        g.q++;
+        const ja = vistas[k] || (vistas[k] = new Set());
+        if (atual && atual.k === k && atual.pg === pg && atual.pp.ate === v - 1) {
+          atual.pp.ate = v; atual.pp.q++; atual.gp.ate = v; atual.gp.q++;
+          if (!atual.pp.linhas.includes(l)) atual.pp.linhas.push(l);
+          if (!ja.has(l)) { ja.add(l); atual.pp.novas.push(l); }
+          return;
+        }
+        const gp = { pagina: pg.pagina, de: v, ate: v, q: 1 };
+        g.partes.push(gp);
+        const pp = { k, de: v, ate: v, q: 1, n: g.partes.length - 1, linhas: [l], novas: [] };
+        if (!ja.has(l)) { ja.add(l); pp.novas.push(l); }
+        pg.partes.push(pp);
+        atual = { k, pg, pp, gp };
+      });
+    }
+    return { series, grupos };
+  }
+
+  /* O que dá para dizer de um grupo (ou só de algumas vezes dele, como as de um cartão):
+     a vez da própria pessoa, as vezes que ela recebeu cedidas e quem passou antes. */
+  function resumoGrupo(g, linhas) {
+    const ls = linhas || g.linhas;
+    const propria = ls.find(l => l.dono && l.dono.m === g.m && !l.recebedor) || null;
+    const recebidas = ls.filter(l => l.recebedor && l.recebedor === g.m);
+    const passaram = [];
+    for (const l of ls) for (const p of l.passaram) passaram.push(p);
+    return { propria, recebidas, passaram, prioridade: !!(propria && propria.dono.origem === 'prioridade') };
+  }
+
+  /* ---------- textos de posição ---------- */
+
+  function juntarE(lista) {
+    const l = lista.filter(Boolean);
+    if (l.length <= 1) return l[0] || '';
+    return l.slice(0, -1).join(', ') + ' e ' + l[l.length - 1];
+  }
+  function faixaVagas(de, ate) {
+    if (de === ate) return 'vaga ' + de;
+    if (ate === de + 1) return 'vagas ' + de + ' e ' + ate;
+    return 'vagas ' + de + ' a ' + ate;
+  }
+  function rotuloPagina(it, bonus, p, minuscula) {
+    if (bonus && it.bonus) return it.bonus.curto + ' ' + p;
+    return (minuscula ? 'página ' : 'Página ') + p;
+  }
+  /* As vagas de uma página: "vaga 4", "vagas 1 a 3" ou, se não forem seguidas, "vagas 1 e 3". */
+  function textoVagas(partes) {
+    const nums = [];
+    for (const x of partes) for (let v = x.de; v <= x.ate; v++) nums.push(v);
+    nums.sort((a, b) => a - b);
+    if (!nums.length) return '';
+    if (nums.every((v, i) => i === 0 || v === nums[i - 1] + 1)) return faixaVagas(nums[0], nums[nums.length - 1]);
+    return 'vagas ' + juntarE(nums.map(String));
+  }
+  function partesPorPagina(g) {
+    const out = [];
+    for (const p of g.partes) {
+      let x = out.find(y => y.pagina === p.pagina);
+      if (!x) { x = { pagina: p.pagina, partes: [] }; out.push(x); }
+      x.partes.push(p);
+    }
+    return out;
+  }
+  /* "Página 2, vagas 1 a 3" ou "Página 1 (vaga 4) e página 2 (vagas 1 e 2)". */
+  function descreverGrupo(it, g) {
+    if (!g || !g.partes.length) return '';
+    if (porVez(it) == null) {
+      return juntarE(g.partes.map((p, i) => rotuloPagina(it, g.bonus, p.pagina, i > 0) + ', ' + (p.q === 1 ? '1 unidade' : p.q + ' unidades')));
+    }
+    const pags = partesPorPagina(g);
+    if (pags.length === 1) return rotuloPagina(it, g.bonus, pags[0].pagina) + ', ' + textoVagas(pags[0].partes);
+    return juntarE(pags.map((x, i) => rotuloPagina(it, g.bonus, x.pagina, i > 0) + ' (' + textoVagas(x.partes) + ')'));
+  }
+  /* Texto de um pedaço do grupo dentro de uma página: "vaga 4 · mais 2 na pág. 2". */
+  function textoParte(it, g, n) {
+    const p = g.partes[n];
+    if (!p) return '';
+    const t = faixaVagas(p.de, p.ate);
+    const outras = g.partes.filter((_, i) => i !== n);
+    if (!outras.length) return t;
+    const pedacos = [];
+    const mesma = outras.filter(x => x.pagina === p.pagina);
+    if (mesma.length) pedacos.push(textoVagas(mesma));
+    const fora = outras.filter(x => x.pagina !== p.pagina);
+    if (fora.length) {
+      const q = fora.reduce((s, x) => s + x.q, 0);
+      const paginas = [];
+      for (const x of fora) if (!paginas.includes(x.pagina)) paginas.push(x.pagina);
+      const onde = g.bonus && it.bonus ? ' no ' + it.bonus.curto + ' ' : (paginas.length > 1 ? ' nas pág. ' : ' na pág. ');
+      pedacos.push(q + onde + juntarE(paginas.map(String)));
+    }
+    return t + ' · mais ' + juntarE(pedacos);
   }
 
   /* Quem é chamado, na ordem: primeiro quem tem vez devolvida (prioridade),
@@ -926,8 +1197,9 @@ tbody tr.saiu td { color: var(--muted); }
 
     const run = fonte.run;
     const proximoIdx = f.length ? (inicio + run) % f.length : -1;
+    const layout = montarLayout(it, r, e.guilda.vagas, linhas);
     return {
-      item: it, fila: f, vagas, linhas,
+      item: it, fila: f, vagas, linhas, series: layout.series, grupos: layout.grupos,
       ponteiroIdx: ptr, inicioIdx: inicio, inicioMudou: inicio !== ptr,
       run, proximoIdx,
       prioridade: prio, prioConsumidas: prio.slice(0, fonte.pi).map(p => p.id),
@@ -1315,9 +1587,10 @@ tbody tr.saiu td { color: var(--muted); }
       const hojeLista = [];
       if (mi) {
         for (const l of mi.linhas) {
-          if (l.dono && l.dono.m === id && !l.recebedor) hojeLista.push({ tipo: 'leva', vaga: l.vaga, origem: l.dono.origem });
+          const grupo = mi.grupos[l.g] || null;
+          if (l.dono && l.dono.m === id && !l.recebedor) hojeLista.push({ tipo: 'leva', vaga: l.vaga, origem: l.dono.origem, grupo });
           if (l.dono && l.dono.m === id && l.recebedor) hojeLista.push({ tipo: 'cedeu', vaga: l.vaga, para: l.recebedor });
-          if (l.recebedor === id) hojeLista.push({ tipo: 'recebe', vaga: l.vaga, de: l.dono.m });
+          if (l.recebedor === id) hojeLista.push({ tipo: 'recebe', vaga: l.vaga, de: l.dono.m, grupo });
           for (const p of l.passaram) if (p.m === id) hojeLista.push({ tipo: p.acao, vaga: l.vaga });
         }
       }
@@ -1354,6 +1627,7 @@ tbody tr.saiu td { color: var(--muted); }
     estadoVazio, normalizar, garantirItem, itensAtivos, item, catalogo, ref,
     fila, indiceDe, posicaoNaFila, proximoDaFila, sugestaoDesignado,
     rascunhoVazio, rascunhoItemVazio, rascunhoItem, gerarVagas, montarItem, montarLeilao,
+    porVez, regraDoItem, montarLayout, arrumarNasPaginas, resumoGrupo, juntarE, faixaVagas, textoVagas, rotuloPagina, descreverGrupo, textoParte,
     fecharLeilao, ultimaSessao, desfazerUltimo,
     adicionarMembro, editarMembro, removerMembro, reativarMembro, importarMembros, nickEmUso,
     definirPonteiro, removerPrioridade, adicionarPrioridade,
@@ -2226,18 +2500,21 @@ tbody tr.saiu td { color: var(--muted); }
     escrever(ctx, txt, P, y, '500 13px ' + FC, C.mudo);
   }
 
-  function agruparPaginas(mi) {
-    const grupos = [];
-    for (const l of mi.linhas) {
-      const chave = l.vaga.item + ':' + l.vaga.pagina;
-      let g = grupos[grupos.length - 1];
-      if (!g || g.chave !== chave) {
-        g = { chave, item: l.vaga.item, bonus: l.vaga.bonus, pagina: l.vaga.pagina, unidades: l.vaga.unidades, ultimaPag: l.vaga.ultimaPag, linhas: [] };
-        grupos.push(g);
-      }
-      g.linhas.push(l);
-    }
-    return grupos;
+  /* As páginas de um item na ordem da tela: as do item e depois as do bônus. */
+  function paginasDoItem(mi) {
+    const out = [];
+    for (const s of mi.series) for (const pg of s.paginas) out.push({ s, pg });
+    return out;
+  }
+  /* Página com alguém levando mais de uma vaga: aí cada cartão mostra as vagas dele. */
+  function temJuntas(mi, pg) {
+    return mi.item.modo !== 'pagina' && pg.partes.some(p => p.q > 1 || mi.grupos[p.k].partes.length > 1);
+  }
+  /* Quem passou aparece uma vez só, na página onde o grupo começa. */
+  function passaramDaPagina(mi, pg) {
+    const out = [];
+    for (const p of pg.partes) for (const x of PH.resumoGrupo(mi.grupos[p.k], p.novas).passaram) out.push(x);
+    return out;
   }
 
   const ACAO = { faltou: 'faltou', naoquis: 'não quis' };
@@ -2247,22 +2524,24 @@ tbody tr.saiu td { color: var(--muted); }
   async function imagemLeilao(e, montagem, data) {
     await prepararFontes();
     const nick = id => (e.membros[id] ? e.membros[id].nick : '?');
+    const textoCedida = l => l.dono.origem === 'prioridade' ? 'vez devolvida de ' + nick(l.dono.m) : 'vez de ' + nick(l.dono.m) + ', nº ' + l.dono.numero;
     const itens = montagem.itens.filter(mi => mi.vagas.length);
     const ROT = 118, GAP = 10, INTERNO = 20;
+    const COLS = Math.min(e.guilda.vagas || 4, 6);
     const largura = W - 2 * P - 2 * INTERNO - ROT;
+    const altura1 = (unidade, mi, pg) => (!unidade ? 62 : temJuntas(mi, pg) ? 90 : 72);
+    const linhasDa = (unidade, pg) => (unidade ? Math.ceil(pg.unidades / COLS) : 1);
     const blocos = itens.map(mi => {
       const unidade = mi.item.modo !== 'pagina';
-      const grupos = agruparPaginas(mi);
+      const paginas = paginasDoItem(mi);
       let h = 60 + 14;
-      for (const g of grupos) {
-        const linhas = unidade ? Math.ceil(g.linhas.length / 4) : g.linhas.length;
-        const alt = unidade ? 72 : 62;
-        h += linhas * (alt + GAP);
-        if (g.linhas.some(l => l.passaram.length)) h += 26;
+      for (const x of paginas) {
+        h += linhasDa(unidade, x.pg) * (altura1(unidade, mi, x.pg) + GAP);
+        if (passaramDaPagina(mi, x.pg).length) h += 26;
         h += 6;
       }
       h += 34;
-      return { mi, unidade, grupos, h };
+      return { mi, unidade, paginas, h };
     });
     const altura = P + 92 + blocos.reduce((s, b) => s + b.h + 18, 0) + 40;
     const { cv, ctx } = novoCanvas(altura);
@@ -2280,48 +2559,65 @@ tbody tr.saiu td { color: var(--muted); }
       const chaveIc = it.icone + it.cor;
       if (!(chaveIc in icones)) icones[chaveIc] = await imagemSVG(I.iconeItemFixo(it.icone, cor.c, cor.t));
       if (icones[chaveIc]) ctx.drawImage(icones[chaveIc], P + 16, y + 12, 36, 36);
-      escrever(ctx, it.nome, P + 62, y + 38, '600 21px ' + FD, cor.t, 'left', W - 2 * P - 330);
-      escrever(ctx, b.mi.paginas + (b.mi.paginas === 1 ? ' página, ' : ' páginas, ') + b.mi.unidades + (b.mi.unidades === 1 ? ' unidade' : ' unidades'), W - P - 18, y + 37, '600 15px ' + FC, C.tinta2, 'right');
+      escrever(ctx, it.nome, P + 62, y + 38, '600 21px ' + FD, cor.t, 'left', W - 2 * P - 380);
+      const regra = it.modo !== 'pagina' && PH.porVez(it) > 1 ? ' · ' + PH.porVez(it) + ' por membro' : '';
+      escrever(ctx, b.mi.paginas + (b.mi.paginas === 1 ? ' página, ' : ' páginas, ') + b.mi.unidades + (b.mi.unidades === 1 ? ' unidade' : ' unidades') + regra, W - P - 18, y + 37, '600 15px ' + FC, C.tinta2, 'right');
       let yy = y + 60 + 14;
-      for (const g of b.grupos) {
-        const corG = g.bonus && it.bonus ? pal(it.bonus.cor || 'rosa') : cor;
+      for (const { s, pg } of b.paginas) {
+        const corG = s.bonus && it.bonus ? pal(it.bonus.cor || 'rosa') : cor;
         const x0 = P + INTERNO;
-        escrever(ctx, (g.bonus && it.bonus ? it.bonus.curto + ' ' : 'Página ') + g.pagina, x0, yy + 22, '600 16px ' + FD, C.tinta, 'left', ROT - 8);
-        escrever(ctx, g.unidades + (it.modo === 'pagina' ? ' unid.' : (g.unidades === 1 ? ' vaga' : ' vagas')), x0, yy + 40, '500 13px ' + FC, C.mudo);
-        if (g.bonus && it.bonus) etiqueta(ctx, 'bônus', x0, yy + 48, corG.s, corG.t, '600 12px ' + FC);
+        escrever(ctx, PH.rotuloPagina(it, s.bonus, pg.pagina), x0, yy + 22, '600 16px ' + FD, C.tinta, 'left', ROT - 8);
+        escrever(ctx, pg.unidades + (it.modo === 'pagina' ? ' unid.' : (pg.unidades === 1 ? ' vaga' : ' vagas')), x0, yy + 40, '500 13px ' + FC, C.mudo);
+        if (s.bonus && it.bonus) etiqueta(ctx, 'bônus', x0, yy + 48, corG.s, corG.t, '600 12px ' + FC);
         const xs = x0 + ROT;
-        const alt = b.unidade ? 72 : 62;
-        const sw = b.unidade ? (largura - 3 * GAP) / 4 : largura;
-        g.linhas.forEach((l, i) => {
-          const col = b.unidade ? i % 4 : 0;
-          const lin = b.unidade ? Math.floor(i / 4) : i;
-          const sx = xs + col * (sw + GAP), sy = yy + lin * (alt + GAP);
-          let fundo = C.claro, borda = C.linha, tracejado = false, nomeTxt, sub = '';
-          if (!l.dono) { fundo = null; borda = C.linha2; tracejado = true; nomeTxt = 'Sem ninguém'; }
-          else if (l.recebedor) { fundo = C.cedeS; borda = null; nomeTxt = nick(l.recebedor); sub = l.dono.origem === 'prioridade' ? 'vez devolvida de ' + nick(l.dono.m) : 'vez de ' + nick(l.dono.m) + ', nº ' + l.dono.numero; }
+        const alt = altura1(b.unidade, b.mi, pg);
+        const juntas = temJuntas(b.mi, pg);
+        const sw = b.unidade ? (largura - (COLS - 1) * GAP) / COLS : largura;
+        for (const parte of pg.partes) {
+          const g = b.mi.grupos[parte.k];
+          const rs = PH.resumoGrupo(g, parte.linhas);
+          let fundo = C.claro, borda = C.linha, tracejado = false, nomeTxt, sub = '', badge, corBadge, fundoBadge;
+          if (!g.m) { fundo = null; borda = C.linha2; tracejado = true; nomeTxt = 'Sem ninguém'; badge = '—'; }
           else {
-            nomeTxt = nick(l.dono.m);
-            if (l.dono.origem === 'prioridade') { fundo = C.ouroS; borda = C.ouroL; sub = 'vez devolvida'; }
-            else sub = (e.membros[l.dono.m] && e.membros[l.dono.m].classe) || '';
+            nomeTxt = nick(g.m);
+            const cedidas = rs.recebidas.map(textoCedida);
+            if (rs.propria) {
+              if (rs.prioridade) { fundo = C.ouroS; borda = C.ouroL; sub = 'vez devolvida'; badge = ('★ ' + (rs.propria.dono.numero || '')).trim(); }
+              else { sub = (e.membros[g.m] && e.membros[g.m].classe) || ''; badge = 'nº ' + rs.propria.dono.numero; }
+              if (cedidas.length) sub = '+ ' + cedidas.join(', ');
+            } else { fundo = C.cedeS; borda = null; sub = cedidas.join(', '); badge = 'cedida'; }
           }
-          caixa(ctx, sx, sy, sw, alt, 14, fundo, borda, tracejado);
-          const prio = l.dono && l.dono.origem === 'prioridade' && !l.recebedor;
-          const badge = !l.dono ? '—' : l.recebedor ? 'cedida' : prio ? ('★ ' + (l.dono.numero || '')).trim() : 'nº ' + l.dono.numero;
-          etiqueta(ctx, badge, sx + 10, sy + 10, l.recebedor ? '#FFFFFF' : prio ? '#FFE7A8' : corG.s, l.recebedor ? C.cedeT : prio ? C.ouroT : corG.t);
-          if (!b.unidade) escrever(ctx, '×' + l.vaga.q, sx + sw - 14, sy + 27, '600 16px ' + FD, corG.t, 'right');
-          if (b.unidade) {
-            escrever(ctx, nomeTxt, sx + 12, sy + 52, '700 16.5px ' + FC, l.dono ? C.tinta : C.mudo, 'left', sw - 24);
-            if (sub) escrever(ctx, sub, sx + 12, sy + 67, '500 12.5px ' + FC, l.recebedor ? C.cedeT : C.mudo, 'left', sw - 24);
-          } else {
-            ctx.font = '600 13px ' + FD;
-            const bw = ctx.measureText(badge).width + 16;
-            escrever(ctx, nomeTxt, sx + 22 + bw, sy + 28, '700 17px ' + FC, l.dono ? C.tinta : C.mudo, 'left', sw - bw - 90);
-            if (sub) escrever(ctx, sub, sx + 12, sy + 52, '500 13px ' + FC, l.recebedor ? C.cedeT : C.mudo, 'left', sw - 24);
+          const cedida = g.m && !rs.propria;
+          fundoBadge = cedida ? '#FFFFFF' : rs.prioridade ? '#FFE7A8' : corG.s;
+          corBadge = cedida ? C.cedeT : rs.prioridade ? C.ouroT : corG.t;
+          if (!b.unidade) {
+            const sx = xs, sy = yy;
+            caixa(ctx, sx, sy, sw, alt, 14, fundo, borda, tracejado);
+            const bw = etiqueta(ctx, badge, sx + 10, sy + 10, fundoBadge, corBadge);
+            escrever(ctx, '×' + parte.q, sx + sw - 14, sy + 27, '600 16px ' + FD, corG.t, 'right');
+            escrever(ctx, nomeTxt, sx + 22 + bw, sy + 28, '700 17px ' + FC, g.m ? C.tinta : C.mudo, 'left', sw - bw - 90);
+            if (sub) escrever(ctx, sub, sx + 12, sy + 52, '500 13px ' + FC, cedida ? C.cedeT : C.mudo, 'left', sw - 24);
+            continue;
           }
-        });
-        const nLin = b.unidade ? Math.ceil(g.linhas.length / 4) : g.linhas.length;
-        yy += nLin * (alt + GAP);
-        const passaram = g.linhas.flatMap(l => l.passaram);
+          const posTxt = juntas || g.partes.length > 1 ? PH.textoParte(it, g, parte.n) : '';
+          let pos = parte.de;
+          while (pos <= parte.ate) {
+            const lin = Math.floor((pos - 1) / COLS), col = (pos - 1) % COLS;
+            const ate = Math.min(parte.ate, (lin + 1) * COLS);
+            const span = ate - pos + 1;
+            const sx = xs + col * (sw + GAP), sy = yy + lin * (alt + GAP);
+            const w = span * sw + (span - 1) * GAP;
+            caixa(ctx, sx, sy, w, alt, 14, fundo, borda, tracejado);
+            etiqueta(ctx, badge, sx + 10, sy + 10, fundoBadge, corBadge);
+            if (parte.q > 1) escrever(ctx, '×' + parte.q, sx + w - 14, sy + 27, '600 16px ' + FD, corG.t, 'right');
+            escrever(ctx, nomeTxt, sx + 12, sy + 52, '700 16.5px ' + FC, g.m ? C.tinta : C.mudo, 'left', w - 24);
+            if (sub) escrever(ctx, sub, sx + 12, sy + 67, '500 12.5px ' + FC, cedida ? C.cedeT : C.mudo, 'left', w - 24);
+            if (posTxt) escrever(ctx, posTxt, sx + 12, sy + (sub ? 83 : 67), '600 12.5px ' + FC, corG.t, 'left', w - 24);
+            pos = ate + 1;
+          }
+        }
+        yy += linhasDa(b.unidade, pg) * (alt + GAP);
+        const passaram = passaramDaPagina(b.mi, pg);
         if (passaram.length) {
           const txt = passaram.map(p => nick(p.m) + ' ' + ACAO[p.acao]).join(', ');
           escrever(ctx, 'Passaram: ' + txt, xs, yy + 14, '600 13px ' + FC, C.faltaT, 'left', largura);
@@ -2392,27 +2688,28 @@ tbody tr.saiu td { color: var(--muted); }
       if (!mi.vagas.length) continue;
       const it = mi.item;
       linhas.push('');
-      const grupos = agruparPaginas(mi);
-      let serieAtual = null;
-      for (const g of grupos) {
-        if (g.item !== serieAtual) {
-          serieAtual = g.item;
-          const nome = g.bonus && it.bonus ? it.bonus.nome + ' (bônus)' : it.nome;
-          const pags = grupos.filter(x => x.item === g.item).length;
-          const unid = mi.linhas.filter(l => l.vaga.item === g.item).reduce((s, l) => s + l.vaga.q, 0);
-          linhas.push('**' + nome + '** · ' + pags + (pags === 1 ? ' página, ' : ' páginas, ') + unid + (unid === 1 ? ' unidade' : ' unidades'));
+      for (const s of mi.series) {
+        if (!s.paginas.length) continue;
+        const nome = s.bonus && it.bonus ? it.bonus.nome + ' (bônus)' : it.nome;
+        const unid = s.paginas.reduce((t, pg) => t + pg.unidades, 0);
+        const regra = !s.bonus && PH.porVez(it) !== 1 ? ' · ' + PH.regraDoItem(it) : '';
+        linhas.push('**' + nome + '** · ' + s.paginas.length + (s.paginas.length === 1 ? ' página, ' : ' páginas, ') + unid + (unid === 1 ? ' unidade' : ' unidades') + regra);
+        for (const pg of s.paginas) {
+          const juntas = temJuntas(mi, pg);
+          const nomes = pg.partes.map(p => {
+            const g = mi.grupos[p.k];
+            const rs = PH.resumoGrupo(g, p.linhas);
+            const rn = PH.resumoGrupo(g, p.novas);
+            let t = g.m ? nick(g.m) : '(ninguém)';
+            if (rs.prioridade) { t += ' ★'; temPrio = true; }
+            if (it.modo === 'pagina') t += ' ×' + p.q;
+            else if (juntas || g.partes.length > 1) t += ' (' + PH.textoParte(it, g, p.n) + ')';
+            if (rn.recebidas.length) t += ' [cedido por ' + PH.juntarE(rn.recebidas.map(l => nick(l.dono.m))) + ']';
+            if (rn.passaram.length) t += ' [no lugar de ' + rn.passaram.map(x => nick(x.m) + ' ' + ACAO[x.acao]).join(', ') + ']';
+            return t;
+          });
+          linhas.push(PH.rotuloPagina(it, s.bonus, pg.pagina) + ': ' + nomes.join(', '));
         }
-        const nomes = g.linhas.map(l => {
-          if (!l.dono) return '(ninguém)';
-          let t;
-          if (l.recebedor) t = nick(l.recebedor) + ' (cedido por ' + nick(l.dono.m) + ')';
-          else { t = nick(l.dono.m); if (l.dono.origem === 'prioridade') { t += ' ★'; temPrio = true; } }
-          if (it.modo === 'pagina') t += ' ×' + l.vaga.q;
-          const passou = l.passaram.map(p => nick(p.m) + ' ' + ACAO[p.acao]);
-          if (passou.length) t += ' [no lugar de ' + passou.join(', ') + ']';
-          return t;
-        });
-        linhas.push('Página ' + g.pagina + ': ' + nomes.join(', '));
       }
       if (mi.fila.length && mi.run > 0) linhas.push('Próximo começa no nº ' + (mi.proximoIdx + 1) + ' (' + mi.fila[mi.proximoIdx].nick + ')');
     }
@@ -2433,7 +2730,7 @@ tbody tr.saiu td { color: var(--muted); }
     return linhas.join('\n').slice(0, 1900);
   }
 
-  raiz.PHExport = { imagemLeilao, imagemTabela, relatorioLeilao, resumoDiscord, agruparPaginas, PALETA, MOTIVO, ACAO };
+  raiz.PHExport = { imagemLeilao, imagemTabela, relatorioLeilao, resumoDiscord, paginasDoItem, PALETA, MOTIVO, ACAO };
 })(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
@@ -2740,8 +3037,8 @@ tbody tr.saiu td { color: var(--muted); }
 
     html += '<section class="secao"><h2 class="secao-titulo">Quantas páginas saíram</h2>' +
       '<div class="tiles">' + montagem.itens.map(mi => tileItem(mi, staff)).join('') + '</div>' +
-      '<p class="dica">Conte as páginas na tela do leilão do jogo. Cada página tem ' + e.guilda.vagas + ' vagas: no ' + esc(nomeUnidade(e)) +
-      ' cada membro leva 1 unidade, e nos baús a página inteira fica com um membro só. Se sair mais do que a fila tem, ela volta ao nº 1 e continua. A última página pode vir incompleta: ajuste no rodapé dela.</p></section>';
+      '<p class="dica">Conte as páginas na tela do leilão do jogo. Cada página tem ' + e.guilda.vagas + ' vagas, e quanto cada membro leva aparece no cartão de cada item. ' +
+      'Se sair mais do que a fila tem, ela volta ao nº 1 e continua, e o que for da mesma pessoa fica junto, em vagas seguidas. A última página pode vir incompleta: ajuste no rodapé dela.</p></section>';
 
     html += '<section class="secao"><div class="linha-acoes"><h2 class="secao-titulo">Quem leva</h2><span class="espaco"></span>';
     if (comVagas.length > 1) {
@@ -2768,11 +3065,6 @@ tbody tr.saiu td { color: var(--muted); }
         : '') +
       '</div></div>';
     return html;
-  }
-
-  function nomeUnidade(e) {
-    const it = e.itens.find(i => i.modo !== 'pagina' && i.ativo !== false);
-    return it ? it.curto : 'Álbum';
   }
 
   function statusVivo(temConteudo) {
@@ -2827,9 +3119,14 @@ tbody tr.saiu td { color: var(--muted); }
     return m && m.ativo !== false ? App.eu : null;
   }
 
-  function descreverVaga(it, vaga) {
-    const pagina = vaga.bonus && it.bonus ? it.bonus.curto + ' ' + vaga.pagina : 'Página ' + vaga.pagina;
-    return it.modo === 'pagina' ? pagina + ', ' + plural(vaga.q, 'unidade', 'unidades') : pagina + ', vaga ' + vaga.pos;
+  /* Onde o membro pega hoje, juntando o que ele leva e o que recebeu cedido. */
+  function descreverOndePega(it, entradas) {
+    const grupos = [];
+    for (const y of entradas) if (y.grupo && !grupos.includes(y.grupo)) grupos.push(y.grupo);
+    const total = grupos.reduce((s, g) => s + g.q, 0);
+    let t = grupos.map(g => PH.descreverGrupo(it, g)).join(' · ');
+    if (total > 1 && it.modo !== 'pagina') t += ' (' + total + ' unidades)';
+    return t;
   }
 
   function dataCurta(d) {
@@ -2842,9 +3139,18 @@ tbody tr.saiu td { color: var(--muted); }
     let titulo, sub = '', destaque = false;
     if (x.fora) { titulo = 'Fora desta fila'; sub = 'Você não pega este item.'; }
     else if (x.hoje.length) {
-      const h = x.hoje.find(y => y.tipo === 'leva' || y.tipo === 'recebe') || x.hoje[0];
-      if (h.tipo === 'leva') { destaque = true; titulo = 'Você leva hoje'; sub = descreverVaga(it, h.vaga) + (h.origem === 'prioridade' ? ', pela vez devolvida' : ''); }
-      else if (h.tipo === 'recebe') { destaque = true; titulo = 'Você recebe hoje'; sub = descreverVaga(it, h.vaga) + ', cedida por ' + nick(h.de); }
+      const pega = x.hoje.filter(y => y.tipo === 'leva' || y.tipo === 'recebe');
+      const h = pega[0] || x.hoje[0];
+      if (pega.length) {
+        destaque = true;
+        const leva = pega.some(y => y.tipo === 'leva');
+        const de = [];
+        for (const y of pega) if (y.tipo === 'recebe' && !de.includes(y.de)) de.push(y.de);
+        titulo = leva ? 'Você leva hoje' : 'Você recebe hoje';
+        sub = descreverOndePega(it, pega) +
+          (pega.some(y => y.tipo === 'leva' && y.origem === 'prioridade') ? ', pela vez devolvida' : '') +
+          (de.length ? (leva ? ', com a vez cedida por ' : ', cedida por ') + PH.juntarE(de.map(nick)) : '');
+      }
       else if (h.tipo === 'cedeu') { titulo = 'Você cedeu hoje'; sub = 'Para ' + nick(h.para) + '. Sua vez volta no próximo leilão.'; }
       else if (h.tipo === 'faltou') { titulo = 'Marcado como falta hoje'; sub = 'Sua vez volta no próximo leilão.'; }
       else { titulo = 'Você passou a vez hoje'; sub = 'Sem vez devolvida.'; }
@@ -2943,7 +3249,7 @@ tbody tr.saiu td { color: var(--muted); }
 
   function tileItem(mi, staff) {
     const it = mi.item, r = App.rascunho.itens[it.id], f = mi.fila;
-    const regra = it.modo === 'pagina' ? 'página inteira por membro' : '1 por membro';
+    const regra = PH.regraDoItem(it);
     let html = '<article class="tile ' + tom(it.cor) + '">' +
       '<header class="tile-cabeca"><span class="selo-item">' + icItem(it.icone) + '</span><div style="min-width:0">' +
       '<h3>' + esc(it.nome) + '</h3><p>' + plural(f.length, 'membro', 'membros') + ' na fila, ' + regra + '</p></div></header>' +
@@ -2998,12 +3304,11 @@ tbody tr.saiu td { color: var(--muted); }
 
   function blocoItem(mi, staff) {
     const it = mi.item;
-    const grupos = X.agruparPaginas(mi);
     let html = '<section class="bloco ' + tom(it.cor) + '" data-item="' + it.id + '">' +
       '<header class="bloco-cabeca"><span class="selo-item" style="width:40px;height:40px;border-radius:13px">' + icItem(it.icone) + '</span>' +
       '<h3>' + esc(it.nome) + '</h3><span class="meta">' + plural(mi.paginas, 'página', 'páginas') + ', ' + plural(mi.unidades, 'unidade', 'unidades') + '</span></header>' +
       '<div class="bloco-corpo">';
-    for (const g of grupos) html += paginaHTML(mi, g, staff);
+    for (const s of mi.series) for (const pg of s.paginas) html += paginaHTML(mi, s, pg, staff);
     if (mi.fila.length) {
       if (mi.run > 0) {
         const prox = mi.fila[mi.proximoIdx];
@@ -3015,69 +3320,94 @@ tbody tr.saiu td { color: var(--muted); }
     return html + '</div></section>';
   }
 
-  function paginaHTML(mi, g, staff) {
+  /* Uma página do jogo. Cada pessoa ocupa vagas seguidas: quem leva 2 aparece num cartão que ocupa 2 vagas. */
+  function paginaHTML(mi, s, pg, staff) {
     const it = mi.item;
-    const bonus = g.bonus && it.bonus;
-    const rotUnid = it.modo === 'pagina' ? plural(g.unidades, 'unidade', 'unidades') : plural(g.unidades, 'vaga', 'vagas');
+    const bonus = s.bonus && it.bonus;
+    const inteira = it.modo === 'pagina';
+    const V = App.estado.guilda.vagas;
+    const juntas = !inteira && pg.partes.some(p => p.q > 1 || mi.grupos[p.k].partes.length > 1);
+    const rotUnid = inteira ? plural(pg.unidades, 'unidade', 'unidades') : plural(pg.unidades, 'vaga', 'vagas');
+    const classes = 'vagas' + (inteira ? ' inteira' : '') + (juntas ? ' juntas' : '') + (!inteira && V > 6 ? ' em-lista' : '');
     let html = '<div class="pagina' + (bonus ? ' ' + tom(it.bonus.cor || 'rosa') : '') + '">' +
-      '<div class="pagina-rotulo"><strong>' + (bonus ? esc(it.bonus.curto) + ' ' + g.pagina : 'Página ' + g.pagina) + '</strong><span>' + rotUnid + '</span>' +
+      '<div class="pagina-rotulo"><strong>' + esc(PH.rotuloPagina(it, s.bonus, pg.pagina)) + '</strong><span>' + rotUnid + '</span>' +
       (bonus ? '<span class="tag tag-bonus">bônus</span>' : '') + '</div>' +
-      '<div class="vagas' + (it.modo === 'pagina' ? ' inteira' : '') + '">' + g.linhas.map(l => vagaHTML(mi, l, staff)).join('') + '</div>';
-    if (g.ultimaPag && staff) {
+      '<div class="' + classes + '"' + (inteira ? '' : ' style="--cols:' + Math.min(V, 6) + '"') + '>' +
+      pg.partes.map(p => vagaHTML(mi, mi.grupos[p.k], p, staff, juntas)).join('') + '</div>';
+    if (pg.ultimaPag && staff) {
       const campo = bonus ? 'ultimaBonus' : 'ultima';
       const id = 'ultima-' + it.id + '-' + campo;
       html += '<div class="pagina-ajuste">Esta página veio com' +
-        '<button type="button" class="passo" id="' + id + '-menos" data-acao="ultima" data-item="' + it.id + '" data-campo="' + campo + '" data-delta="-1" aria-label="Uma unidade a menos na última página" ' + (g.unidades <= 1 ? 'disabled' : '') + '>' + ic('menos') + '</button>' +
-        '<output' + (App.pulou === it.id + '-' + campo ? ' class="pulou"' : '') + '>' + g.unidades + '</output>' +
-        '<button type="button" class="passo" id="' + id + '-mais" data-acao="ultima" data-item="' + it.id + '" data-campo="' + campo + '" data-delta="1" aria-label="Uma unidade a mais na última página" ' + (g.unidades >= App.estado.guilda.vagas ? 'disabled' : '') + '>' + ic('mais') + '</button>' +
-        (it.modo === 'pagina' ? 'unidades' : 'vagas') + '</div>';
+        '<button type="button" class="passo" id="' + id + '-menos" data-acao="ultima" data-item="' + it.id + '" data-campo="' + campo + '" data-delta="-1" aria-label="Uma unidade a menos na última página" ' + (pg.unidades <= 1 ? 'disabled' : '') + '>' + ic('menos') + '</button>' +
+        '<output' + (App.pulou === it.id + '-' + campo ? ' class="pulou"' : '') + '>' + pg.unidades + '</output>' +
+        '<button type="button" class="passo" id="' + id + '-mais" data-acao="ultima" data-item="' + it.id + '" data-campo="' + campo + '" data-delta="1" aria-label="Uma unidade a mais na última página" ' + (pg.unidades >= V ? 'disabled' : '') + '>' + ic('mais') + '</button>' +
+        (inteira ? 'unidades' : 'vagas') + '</div>';
     }
     return html + '</div>';
   }
 
-  function vagaHTML(mi, l, staff) {
-    const e = App.estado;
-    const chave = mi.item.id + '|' + l.vaga.k;
+  const textoCedida = l => l.dono.origem === 'prioridade' ? 'vez devolvida de ' + nick(l.dono.m) : 'vez de ' + nick(l.dono.m) + ', nº ' + l.dono.numero;
+
+  /* O cartão de uma pessoa dentro de uma página (ou o pedaço dela, se o grupo continua na outra página). */
+  function vagaHTML(mi, g, parte, staff, juntas) {
+    const e = App.estado, it = mi.item;
+    const chave = chaveVaga(it, g, g.partes[parte.n]);
     const nova = !App.primeiraMontagem && !App.vagasVistas.has(chave);
     const eu = meuId();
-    const minha = !!(eu && l.dono && ((l.dono.m === eu && !l.recebedor) || l.recebedor === eu));
+    const minha = !!(eu && g.m === eu);
     const atraso = nova ? Math.min(App.contaNovas++ * 35, 420) : 0;
-    const estiloAtraso = atraso ? ' style="--atraso:' + atraso + 'ms"' : '';
+    const rs = PH.resumoGrupo(g, parte.linhas);
     let cls = 'vaga', nome, sub = '', num;
-    if (!l.dono) {
+    if (!g.m) {
       cls += ' sem-dono'; nome = 'Sem ninguém'; sub = 'todos da fila passaram';
       num = '<span class="vaga-num">—</span>';
     } else {
-      const m = e.membros[l.dono.m];
-      const daVez = l.dono.origem === 'prioridade' ? 'vez devolvida' : 'nº ' + l.dono.numero;
-      const textoCedida = l.dono.origem === 'prioridade' ? 'vez devolvida de ' + (m ? m.nick : '?') : 'vez de ' + (m ? m.nick : '?') + ', ' + daVez;
-      if (l.recebedor) num = '<span class="vaga-num cede">cedida</span>';
-      else if (l.dono.origem === 'prioridade') num = '<span class="vaga-num prio" title="Vez devolvida">★' + (l.dono.numero ? ' ' + l.dono.numero : '') + '</span>';
-      else num = '<span class="vaga-num">nº ' + l.dono.numero + '</span>';
-      if (l.recebedor) { cls += ' cedida'; nome = nick(l.recebedor); sub = textoCedida; }
-      else {
-        nome = m ? m.nick : '?';
-        if (l.dono.origem === 'prioridade') { cls += ' prioridade'; sub = 'vez devolvida, ' + (TXT_MOTIVO[l.dono.motivo] || 'ajuste'); }
-        else sub = (m && m.classe) || '';
+      const m = e.membros[g.m];
+      nome = m ? m.nick : 'ex-membro';
+      const cedidas = rs.recebidas.map(textoCedida);
+      if (rs.propria) {
+        const d = rs.propria.dono;
+        if (d.origem === 'prioridade') {
+          cls += ' prioridade';
+          num = '<span class="vaga-num prio" title="Vez devolvida">★' + (d.numero ? ' ' + d.numero : '') + '</span>';
+          sub = 'vez devolvida, ' + (TXT_MOTIVO[d.motivo] || 'ajuste');
+        } else {
+          num = '<span class="vaga-num">nº ' + d.numero + '</span>';
+          sub = (m && m.classe) || '';
+        }
+        if (cedidas.length) sub = '+ ' + cedidas.join(', ');
+      } else {
+        cls += ' cedida';
+        num = '<span class="vaga-num cede">cedida</span>';
+        sub = cedidas.join(', ');
       }
     }
     if (minha) cls += ' minha';
     if (App.mudaram.has(chave)) cls += ' mudou';
-    const q = mi.item.modo === 'pagina' ? '<span class="vaga-q">×' + l.vaga.q + '</span>' : '';
-    const passou = l.passaram.length ? '<span class="vaga-passou">' + l.passaram.map(p => '<s>' + esc(nick(p.m)) + '</s> ' + TXT_ACAO[p.acao]).join(', ') + '</span>' : '';
-    const conteudo = '<span class="vaga-topo">' + num + (minha ? '<span class="vaga-voce">você</span>' : '') + q + '</span><span class="vaga-nick">' + esc(nome) + '</span>' + (sub ? '<span class="vaga-sub">' + esc(sub) + '</span>' : '') + passou;
-    if (staff && l.dono) {
-      return '<button type="button" class="' + cls + (nova ? ' nova' : '') + '"' + estiloAtraso + ' id="vaga-' + idSeguro(chave) + '" data-acao="vaga" data-item="' + mi.item.id + '" data-k="' + esc(l.vaga.k) + '" aria-label="Página ' + l.vaga.pagina + ', ' + esc(nome) + '. Marcar o que aconteceu">' + conteudo + '</button>';
+    const q = it.modo === 'pagina' || parte.q > 1 ? '<span class="vaga-q">×' + parte.q + '</span>' : '';
+    const pos = it.modo !== 'pagina' && (juntas || g.partes.length > 1) ? '<span class="vaga-pos">' + esc(PH.textoParte(it, g, parte.n)).replace(/(pág\.|vagas?) /g, '$1&nbsp;') + '</span>' : '';
+    const passou = rs.passaram.length ? '<span class="vaga-passou">' + rs.passaram.map(p => '<s>' + esc(nick(p.m)) + '</s> ' + TXT_ACAO[p.acao]).join(', ') + '</span>' : '';
+    const conteudo = '<span class="vaga-topo">' + num + (minha ? '<span class="vaga-voce">você</span>' : '') + q + '</span><span class="vaga-nick">' + esc(nome) + '</span>' +
+      (sub ? '<span class="vaga-sub">' + esc(sub) + '</span>' : '') + pos + passou;
+    const estilo = ' style="--span:' + parte.q + (atraso ? ';--atraso:' + atraso + 'ms' : '') + '"';
+    const onde = PH.rotuloPagina(it, g.bonus, g.partes[parte.n].pagina) + ', ' + (it.modo === 'pagina' ? plural(parte.q, 'unidade', 'unidades') : PH.faixaVagas(parte.de, parte.ate));
+    if (staff && g.linhas.some(l => l.dono)) {
+      return '<button type="button" class="' + cls + (nova ? ' nova' : '') + '"' + estilo + ' id="vaga-' + idSeguro(chave) + '" data-acao="vaga" data-item="' + it.id + '" data-k="' + esc(g.k) + '" aria-label="' + esc(onde + ', ' + nome) + '. Marcar o que aconteceu">' + conteudo + '</button>';
     }
-    return '<div class="' + cls + (nova ? ' nova' : '') + '"' + estiloAtraso + '>' + conteudo + '</div>';
+    return '<div class="' + cls + (nova ? ' nova' : '') + '"' + estilo + '>' + conteudo + '</div>';
   }
 
-  /* Para animar: guarda quem está em cada vaga antes de uma mudança e marca as que mudaram. */
+  /* Cada cartão é identificado pelo lugar onde começa (página e vaga), para a animação
+     mostrar que aquele lugar mudou de dono. */
+  const chaveVaga = (it, g, p) => it.id + '|' + g.item + ':' + p.pagina + ':' + p.de;
+
+  /* Para animar: guarda quem está em cada lugar antes de uma mudança e marca os que mudaram. */
   function assinaturas() {
     const mapa = new Map();
     const m = PH.montarLeilao(App.estado, App.rascunho);
-    for (const mi of m.itens) for (const l of mi.linhas) {
-      mapa.set(mi.item.id + '|' + l.vaga.k, (l.dono ? l.dono.m : '-') + '>' + (l.recebedor || '') + '/' + l.passaram.map(p => p.m + ':' + p.acao).join(','));
+    for (const mi of m.itens) for (const g of Object.values(mi.grupos)) {
+      const quem = g.linhas.map(l => (l.dono ? l.dono.m : '-') + '>' + (l.recebedor || '') + '/' + l.passaram.map(p => p.m + ':' + p.acao).join(',')).join(';');
+      for (const p of g.partes) mapa.set(chaveVaga(mi.item, g, p), (g.m || '-') + '×' + p.q + '#' + quem);
     }
     return mapa;
   }
@@ -3155,38 +3485,69 @@ tbody tr.saiu td { color: var(--muted); }
     });
   }
 
+  /* Toque num cartão: se nele tem só a vez de uma pessoa, abre direto; se juntou a vez
+     dela com vezes cedidas por outros, pergunta de quem é a marcação. */
   function janelaVaga(itemId, k) {
+    const e = App.estado, it = PH.item(e, itemId);
+    const mi = PH.montarItem(e, it, App.rascunho.itens[itemId]);
+    const g = mi.grupos[k];
+    if (!g) return;
+    const donos = [];
+    for (const l of g.linhas) if (l.dono && !donos.includes(l.dono.m)) donos.push(l.dono.m);
+    if (!donos.length) return;
+    donos.sort((a, b) => (a === g.m ? -1 : b === g.m ? 1 : 0));
+    if (donos.length === 1) return janelaDono(itemId, donos[0]);
+    return abrirJanela({
+      titulo: 'De quem é a marcação?',
+      sub: esc(PH.descreverGrupo(it, g)) + ' do ' + esc(it.nome),
+      corpo: '<div class="opcoes">' + donos.map(d => '<button type="button" class="opcao ' + (d === g.m ? 'ok' : 'cede') + '" data-dono="' + esc(d) + '">' + ic(d === g.m ? 'check' : 'ceder') +
+        '<strong>' + esc(nick(d)) + '</strong><span>' + (d === g.m ? 'A vez de ' + esc(nick(d)) + ' neste leilão.' : 'Cedeu a vez para ' + esc(nick(g.m)) + '.') + '</span></button>').join('') + '</div>',
+      acoes: [{ texto: 'Cancelar', classe: 'btn-leve' }],
+      aoAbrir: j => j.$$('[data-dono]').forEach(b => b.addEventListener('click', () => {
+        const d = b.dataset.dono;
+        j.fechar();
+        janelaDono(itemId, d);
+      }))
+    });
+  }
+
+  function janelaDono(itemId, dono) {
     const e = App.estado, it = PH.item(e, itemId);
     const rItem = App.rascunho.itens[itemId];
     const mi = PH.montarItem(e, it, rItem);
-    const l = mi.linhas.find(x => x.vaga.k === k);
-    if (!l || !l.dono) return;
-    const dono = l.dono.m;
+    const linhas = mi.linhas.filter(x => x.dono && x.dono.m === dono);
+    if (!linhas.length) return;
+    const l0 = linhas[0];
+    const g = mi.grupos[l0.g];
+    const unidades = linhas.reduce((s, x) => s + x.vaga.q, 0);
+    const passaram = [];
+    for (const x of linhas) for (const p of x.passaram) passaram.push(p);
     const acaoAtual = rItem.passes[dono] || (rItem.cedidos[dono] ? 'cedeu' : 'levou');
     const membros = PH.fila(e, itemId).concat(Object.values(e.membros).filter(m => m.ativo !== false && (m.fora || []).includes(itemId)))
       .filter(m => m.id !== dono).sort((a, b) => PH.compararNick(a.nick, b.nick));
     const opcao = (acao, cls, icone, titulo, texto) => '<button type="button" class="opcao ' + cls + '" data-opcao="' + acao + '" aria-pressed="' + (acaoAtual === acao) + '">' + ic(icone) + '<strong>' + titulo + '</strong><span>' + texto + '</span></button>';
     const nomeDono = esc(nick(dono));
+    const oQue = it.modo === 'pagina' ? 'a página' : unidades > 1 ? 'as ' + unidades + ' unidades' : 'a vaga';
     let corpo = '<div class="opcoes">' +
-      opcao('levou', 'ok', 'check', 'Levou', nomeDono + ' fica com ' + (it.modo === 'pagina' ? 'a página' : 'a vaga') + '.') +
-      opcao('faltou', 'falta', 'ausencia', 'Faltou', 'A vaga vai para o próximo da fila e ' + nomeDono + ' ganha a vez devolvida no próximo leilão.') +
-      opcao('naoquis', 'neutro', 'x', 'Não quis', 'A vaga vai para o próximo da fila, sem vez devolvida.') +
+      opcao('levou', 'ok', 'check', 'Levou', nomeDono + ' fica com ' + oQue + '.') +
+      opcao('faltou', 'falta', 'ausencia', 'Faltou', (unidades > 1 ? 'As unidades vão' : 'A vaga vai') + ' para o próximo da fila e ' + nomeDono + ' ganha a vez devolvida no próximo leilão.') +
+      opcao('naoquis', 'neutro', 'x', 'Não quis', (unidades > 1 ? 'As unidades vão' : 'A vaga vai') + ' para o próximo da fila, sem vez devolvida.') +
       opcao('cedeu', 'cede', 'ceder', 'Cedeu para outro membro', 'Quem recebe não perde a própria vez, e ' + nomeDono + ' ganha a vez devolvida.') +
       '</div>' +
       '<label class="campo" id="campo-cede" ' + (acaoAtual === 'cedeu' ? '' : 'hidden') + '><span>Quem recebe</span><select id="cede-para">' +
       '<option value="">Escolha o membro</option>' +
       membros.map(m => '<option value="' + m.id + '"' + (rItem.cedidos[dono] === m.id ? ' selected' : '') + '>' + esc(m.nick) + (m.classe ? ' · ' + esc(m.classe) : '') + '</option>').join('') +
       '</select></label>';
-    if (l.passaram.length) {
-      corpo += '<div class="grupo"><p class="dica">Passaram nesta vaga antes:</p><div class="pessoas">' +
-        l.passaram.map(p => '<div class="pessoa"><span class="quem"><strong>' + esc(nick(p.m)) + '</strong><span>' + TXT_ACAO[p.acao] + (p.origem === 'prioridade' ? ', tinha vez devolvida' : ', nº ' + p.numero) + '</span></span>' +
+    if (passaram.length) {
+      corpo += '<div class="grupo"><p class="dica">Passaram nesta vez antes:</p><div class="pessoas">' +
+        passaram.map(p => '<div class="pessoa"><span class="quem"><strong>' + esc(nick(p.m)) + '</strong><span>' + TXT_ACAO[p.acao] + (p.origem === 'prioridade' ? ', tinha vez devolvida' : ', nº ' + p.numero) + '</span></span>' +
           '<button type="button" class="btn btn-p" data-volta="' + p.m + '">' + ic('desfazer') + 'Levou, na verdade</button></div>').join('') +
         '</div></div>';
     }
     let escolha = acaoAtual;
     const h = abrirJanela({
       titulo: nick(dono),
-      sub: 'Página ' + l.vaga.pagina + (it.modo === 'pagina' ? '' : ', vaga ' + l.vaga.pos) + ' do ' + esc(it.nome) + (l.dono.origem === 'prioridade' ? ', vez devolvida' : ', nº ' + l.dono.numero + ' na fila'),
+      sub: esc(PH.descreverGrupo(it, g)) + ' do ' + esc(it.nome) + (l0.dono.origem === 'prioridade' ? ', vez devolvida' : ', nº ' + l0.dono.numero + ' na fila'),
       corpo,
       acoes: [
         { texto: 'Cancelar', classe: 'btn-leve' },
@@ -3904,12 +4265,16 @@ tbody tr.saiu td { color: var(--muted); }
   }
 
   function textoRegras(e) {
-    const un = e.itens.find(i => i.modo !== 'pagina' && i.ativo !== false);
+    const ativos = PH.itensAtivos(e);
+    const un = ativos.find(i => i.bonus);
     const bonus = un && un.bonus;
     const V = e.guilda.vagas;
+    const regras = ativos.map(it => '<strong>' + esc(it.curto) + '</strong>, ' + esc(PH.regraDoItem(it))).join('; ');
     return '<p>Cada item tem a sua fila, sempre em <strong>ordem alfabética de nick</strong>. O número de cada membro é a posição dele nessa ordem: quem entra ou sai muda os números de quem vem depois, mas a vez continua com a mesma pessoa.</p>' +
       '<p>A fila não gira. O que anda é o <strong>início</strong>: cada leilão começa de onde o anterior parou e, depois do último nome, volta ao nº 1. Ao fechar o leilão, o início anda sozinho.</p>' +
-      '<p>Cada página tem ' + V + ' vagas. ' + (un ? 'No ' + esc(un.nome) + ', cada membro leva 1 unidade, então uma página atende ' + V + ' pessoas. ' : '') + 'Nos baús, as ' + V + ' unidades da página ficam com um membro só.</p>' +
+      '<p>Cada página tem ' + V + ' vagas, e cada item tem a sua regra de quanto cada membro leva por vez: ' + regras + '. Quem leva várias por vez fica com unidades seguidas, até acabar.</p>' +
+      '<p>Tudo o que a fila dá para uma mesma pessoa fica <strong>junto, em vagas seguidas</strong>, inclusive quando a fila dá a volta. Ninguém precisa pegar a primeira e a última da mesma página, e cada um fica numa página só sempre que dá. Quando não dá, o grupo continua no começo da próxima página.</p>' +
+      '<p>Com o leilão rolando, falta e cedida <strong>não tiram ninguém do lugar</strong>: quem assume pega nas vagas de quem saiu. Se essa pessoa já tinha vaga, o site junta as vagas dela quando dá para fazer isso sem mexer em mais ninguém.</p>' +
       (bonus ? '<p>O <strong>' + esc(bonus.nome) + '</strong> sai nas páginas do ' + esc(un.curto) + ' e é bônus: quem leva não gasta a vez e ganha vez devolvida no próximo ' + esc(un.curto) + '.</p>' : '') +
       '<p>Cada vaga é independente. Quem <strong>falta</strong> ou <strong>não quer</strong> libera a vaga para o próximo da fila, sem tirar ninguém do lugar; quem falta ganha a vez devolvida, quem não quer, não. Quem <strong>cede</strong> escolhe quem leva: o escolhido não perde a vez dele, e quem cedeu ganha a vez devolvida.</p>' +
       '<p>Itens <strong>designados</strong> são escolhidos dentro do jogo. Eles não passam pela fila do leilão, mas contam nos totais de cada membro.</p>';
@@ -3927,14 +4292,23 @@ tbody tr.saiu td { color: var(--muted); }
       '<div class="linha-acoes"><button type="button" class="btn btn-p btn-primario" data-acao="salvar-guilda">' + ic('check') + 'Salvar guilda</button></div></section>';
   }
 
+  function opcoesRegra(it) {
+    const n = PH.porVez(it);
+    const atual = n == null ? 'pagina' : 'u' + n;
+    const limite = Math.max(12, n || 1);
+    let h = '';
+    for (let i = 1; i <= limite; i++) h += '<option value="u' + i + '"' + (atual === 'u' + i ? ' selected' : '') + '>' + (i === 1 ? '1 unidade por vez' : i + ' unidades seguidas') + '</option>';
+    return h + '<option value="pagina"' + (atual === 'pagina' ? ' selected' : '') + '>A página inteira</option>';
+  }
+
   function secaoItens(e) {
-    return '<section class="secao"><h2 class="secao-titulo">Itens do leilão</h2><p class="dica">Os nomes aparecem em todas as telas e nas imagens. Mudar a regra de um item vale para os próximos leilões; o histórico continua como foi.</p>' +
+    return '<section class="secao"><h2 class="secao-titulo">Itens do leilão</h2><p class="dica">Os nomes aparecem em todas as telas e nas imagens. Em <strong>Cada membro leva</strong>, escolha quantas unidades seguidas cada pessoa pega na vez dela: com 3, por exemplo, cada um leva 3 em sequência até acabar. O que a fila der para a mesma pessoa aparece junto. Mudar a regra vale para os próximos leilões; o histórico continua como foi.</p>' +
       '<div class="cartoes">' + e.itens.map(it => {
         const p = 'i-' + it.id + '-';
         return '<article class="cartao tom ' + tom(it.cor) + '"><h3>' + icItem(it.icone) + esc(it.nome) + '</h3>' +
           '<label class="campo"><span>Nome</span><input id="' + p + 'nome" maxlength="40" value="' + esc(it.nome) + '"></label>' +
           '<label class="campo"><span>Nome curto</span><input id="' + p + 'curto" maxlength="18" value="' + esc(it.curto) + '"></label>' +
-          '<label class="campo"><span>Regra</span><select id="' + p + 'modo"><option value="unidade"' + (it.modo !== 'pagina' ? ' selected' : '') + '>1 unidade por membro</option><option value="pagina"' + (it.modo === 'pagina' ? ' selected' : '') + '>Página inteira por membro</option></select></label>' +
+          '<label class="campo"><span>Cada membro leva</span><select id="' + p + 'regra">' + opcoesRegra(it) + '</select></label>' +
           '<div class="grade-campos"><label class="campo"><span>Cor</span><select id="' + p + 'cor">' + CORES.map(c => '<option value="' + c[0] + '"' + (it.cor === c[0] ? ' selected' : '') + '>' + c[1] + '</option>').join('') + '</select></label>' +
           '<label class="campo"><span>Desenho</span><select id="' + p + 'icone">' + ICONES.map(c => '<option value="' + c[0] + '"' + (it.icone === c[0] ? ' selected' : '') + '>' + c[1] + '</option>').join('') + '</select></label></div>' +
           (it.bonus ? '<label class="campo"><span>Bônus que sai junto</span><input id="' + p + 'bonus" maxlength="40" value="' + esc(it.bonus.nome) + '"></label>' : '') +
@@ -4137,7 +4511,9 @@ tbody tr.saiu td { color: var(--muted); }
       const p = 'i-' + it.id + '-', v = s => { const el = document.getElementById(p + s); return el ? el.value.trim() : ''; };
       if (v('nome')) it.nome = v('nome');
       if (v('curto')) it.curto = v('curto');
-      it.modo = v('modo') === 'pagina' ? 'pagina' : 'unidade';
+      const regra = v('regra');
+      if (regra === 'pagina') it.modo = 'pagina';
+      else if (/^u\d+$/.test(regra)) { it.modo = 'unidade'; it.porVez = PH.inteiro(regra.slice(1), 1, 99, 1); }
       if (CORES.some(c => c[0] === v('cor'))) it.cor = v('cor');
       if (ICONES.some(c => c[0] === v('icone'))) it.icone = v('icone');
       if (it.bonus && v('bonus')) it.bonus.nome = v('bonus');
